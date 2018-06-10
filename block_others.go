@@ -4,7 +4,7 @@ package sha256x8
 
 var available = false
 
-func block(s *uint32, data *uint32, K *uint32, bsMask *byte) {
+func block(s *uint32, data **byte, K *uint32, bsMask *byte) {
 	panic("GOARCH not supported")
 }
 

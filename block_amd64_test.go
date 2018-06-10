@@ -33,16 +33,22 @@ func TestBlockAvx2(t *testing.T) {
 		s2[i] = s[i]
 	}
 
-	for i := 0; i < 8; i++ {
-		copy(data2[i*32:(i+1)*32], data[2*i*32:(2*i+1)*32])
-		copy(data2[(8+i)*32:(8+i+1)*32], data[(2*i+1)*32:(2*i+2)*32])
-	}
+	copy(data2[:], data[:])
 
-	data2w := castByteSliceToUint32Slice(data2[:])
+	pData := []*byte{
+		&data2[0],
+		&data2[64],
+		&data2[128],
+		&data2[192],
+		&data2[256],
+		&data2[320],
+		&data2[384],
+		&data2[448],
+	}
 
 	blockGeneric(s2[:], data[:])
 	transpose(&s[0])
-	block(&s[0], &data2w[0], &_K[0], &byteswapMask[0])
+	block(&s[0], &pData[0], 1, &_K[0], &byteswapMask[0])
 	transpose(&s[0])
 	for i := 0; i < 64; i++ {
 		if s[i] != s2[i] {
@@ -76,9 +82,19 @@ func TestTransposeAvx2(t *testing.T) {
 
 func BenchmarkBlockAvx2(b *testing.B) {
 	var s [64]uint32
-	var d [128]uint32
+	var d [512]byte
+	pD := []*byte{
+		&d[0],
+		&d[64],
+		&d[128],
+		&d[192],
+		&d[256],
+		&d[320],
+		&d[384],
+		&d[448],
+	}
 	for n := 0; n < b.N; n++ {
-		block(&s[0], &d[0], &_K[0], &byteswapMask[0])
+		block(&s[0], &pD[0], 1, &_K[0], &byteswapMask[0])
 	}
 }
 

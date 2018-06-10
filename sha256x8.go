@@ -79,55 +79,70 @@ func castByteSliceToUint32Slice(buf []byte) []uint32 {
 func (d *Digest) Write(data [8][]byte) {
 	d.l += uint64(len(data[0]))
 	for len(data[0]) > 0 {
-		pn2 := len(data[0]) + d.pn
-		toCopy := len(data[0])
-		if d.pn >= 32 {
-			if pn2 >= 64 {
-				toCopy = len(data[0]) - (pn2 - 64)
-				pn2 = 0
+		if len(data[0]) >= 64 && d.pn == 0 {
+			nblocks := len(data[0]) / 64
+			pPtr := [8]*byte{
+				&data[0][0], &data[1][0], &data[2][0], &data[3][0],
+				&data[4][0], &data[5][0], &data[6][0], &data[7][0],
 			}
+			block(&d.s[0], &pPtr[0], nblocks, &_K[0], &byteswapMask[0])
 			for i := 0; i < 8; i++ {
-				copy(d.p[((i+8)*32)+(d.pn-32):], data[i][:toCopy])
-				data[i] = data[i][toCopy:]
-			}
-			d.pn = pn2
-			if pn2 == 0 {
-				casted_p := castByteSliceToUint32Slice(d.p[:])
-				block(&d.s[0], &casted_p[0], &_K[0], &byteswapMask[0])
+				data[i] = data[i][64*nblocks:]
 			}
 			continue
 		}
-		if pn2 >= 32 {
-			toCopy = len(data[0]) - (pn2 - 32)
-			pn2 = 32
+		pn2 := len(data[0]) + d.pn
+		toCopy := len(data[0])
+		if pn2 >= 64 {
+			toCopy = len(data[0]) - (pn2 - 64)
+			pn2 = 0
 		}
 		for i := 0; i < 8; i++ {
-			copy(d.p[(i*32)+d.pn:], data[i][:toCopy])
+			copy(d.p[i*64+d.pn:], data[i][:toCopy])
 			data[i] = data[i][toCopy:]
 		}
 		d.pn = pn2
+		if pn2 == 0 {
+			pPtr := [8]*byte{
+				&d.p[0], &d.p[64], &d.p[128], &d.p[192],
+				&d.p[256], &d.p[320], &d.p[384], &d.p[448],
+			}
+			block(&d.s[0], &pPtr[0], 1, &_K[0], &byteswapMask[0])
+		}
 	}
 }
 
 // Writes the i'th sha256 into out[i].  Invalidates d.
 func (d *Digest) SumsInto(out [8][]byte) {
 	var tmp [64]byte
-	tmp[0] = 0x80
-	var padding []byte
-	if d.pn < 56 {
-		padding = tmp[:56-d.pn]
-	} else {
-		padding = tmp[:64+56-d.pn]
-	}
 	lb := d.l << 3
-	d.Write([8][]byte{padding, padding, padding, padding, padding, padding, padding, padding})
-	for i := uint(0); i < 8; i++ {
-		tmp[i] = byte(lb >> (56 - 8*i))
-	}
-	padding = tmp[:8]
-	d.Write([8][]byte{padding, padding, padding, padding, padding, padding, padding, padding})
-	if d.pn != 0 {
-		panic("d.pn != 0")
+	if d.pn < 56 {
+		// Padding fits in current block
+		tmp[d.pn] = 0x80
+		for i := uint(0); i < 8; i++ {
+			tmp[64-i-1] = byte(lb >> (8 * i))
+		}
+		for i := 0; i < 8; i++ {
+			copy(d.p[64*i+d.pn:64*(i+1)], tmp[d.pn:64])
+		}
+		pPtr := [8]*byte{
+			&d.p[0], &d.p[64], &d.p[128], &d.p[192],
+			&d.p[256], &d.p[320], &d.p[384], &d.p[448],
+		}
+		block(&d.s[0], &pPtr[0], 1, &_K[0], &byteswapMask[0])
+	} else {
+		var padding []byte
+		tmp[0] = 0x80
+		padding = tmp[:64+56-d.pn]
+		d.Write([8][]byte{padding, padding, padding, padding, padding, padding, padding, padding})
+		for i := uint(0); i < 8; i++ {
+			tmp[i] = byte(lb >> (56 - 8*i))
+		}
+		padding = tmp[:8]
+		d.Write([8][]byte{padding, padding, padding, padding, padding, padding, padding, padding})
+		if d.pn != 0 {
+			panic("d.pn != 0")
+		}
 	}
 	byteswap(d.s[:])
 	transpose(&d.s[0])

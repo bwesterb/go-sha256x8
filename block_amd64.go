@@ -9,7 +9,7 @@ import (
 var available = cpuid.EnabledAVX && cpuid.HasExtendedFeature(cpuid.AVX2)
 
 // Computes one block of SHA256
-func block(s *uint32, data *uint32, K *uint32, bsMask *byte)
+func block(s *uint32, data **byte, nblocks int, K *uint32, bsMask *byte)
 
 // Transposes the given 8x8 table of uint32s
 func transpose(table *uint32)

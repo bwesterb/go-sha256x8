@@ -54,7 +54,7 @@ func TestFuzz(t *testing.T) {
 			refs[i] = sha256.New()
 		}
 		for bit := 0; bit < 100; bit++ {
-			l := rand.Int31n(128)
+			l := rand.Int31n(256)
 			var bufs [8][]byte
 			for i := 0; i < 8; i++ {
 				bufs[i] = make([]byte, l)

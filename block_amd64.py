@@ -81,21 +81,26 @@ def avx2_rotr32(res, x, y):
     VPOR(res, tmp, res)
 
 s = Argument(ptr(uint32_t))
-data = Argument(ptr(uint32_t))
+data = Argument(ptr(ptr(uint8_t)))
+nblocks = Argument(size_t)
 K = Argument(ptr(uint32_t))
 mask = Argument(ptr(uint8_t))
-with Function("block", (s, data, K, mask), target=uarch.haswell) as function:
+with Function("block", (s, data, nblocks, K, mask), target=uarch.haswell) as function:
     reg_s = GeneralPurposeRegister64()
     reg_data = GeneralPurposeRegister64()
     reg_K = GeneralPurposeRegister64()
     reg_mask = GeneralPurposeRegister64()
+    reg_nblocks = GeneralPurposeRegister64()
 
     LOAD.ARGUMENT(reg_s, s)
     LOAD.ARGUMENT(reg_data, data)
+    LOAD.ARGUMENT(reg_nblocks, nblocks)
     LOAD.ARGUMENT(reg_K, K)
     LOAD.ARGUMENT(reg_mask, mask)
 
     reg_sp_save = GeneralPurposeRegister64()
+    reg_data_offset = GeneralPurposeRegister64()
+    MOV(reg_data_offset, 0)
 
     # Align stack to 32byte boundary
     MOV(reg_sp_save, registers.rsp)
@@ -105,120 +110,133 @@ with Function("block", (s, data, K, mask), target=uarch.haswell) as function:
     SUB(registers.rsp, 512)
     w = [[registers.rsp + 32*i] for i in xrange(16)]
 
-    tmp = YMMRegister()
-    # Load data into w
-    for i in xrange(16):
-        VMOVDQU(tmp, [reg_data + 32*i])
-        VPSHUFB(tmp, tmp, [reg_mask])
-        VMOVDQU(w[i], tmp)
+    with Loop() as loop:
+        tmp = YMMRegister()
 
-    transpose(w)
-    transpose(w[8:])
+        # Load data into w
+        for i in xrange(8):
+            reg_ddata = GeneralPurposeRegister64()
+            MOV(reg_ddata, [reg_data + 8*i])
+            ADD(reg_ddata, reg_data_offset)
+            VMOVDQU(tmp, [reg_ddata])
+            VPSHUFB(tmp, tmp, [reg_mask])
+            VMOVDQU(w[i], tmp)
+            VMOVDQU(tmp, [reg_ddata + 32])
+            VPSHUFB(tmp, tmp, [reg_mask])
+            VMOVDQU(w[i+8], tmp)
 
-    # Copy state into ss
-    ss = [YMMRegister() for i in xrange(8)]
-    a, b, c, d, e, f, g, h = ss
-    T1, T2 = YMMRegister(), YMMRegister()
+        transpose(w)
+        transpose(w[8:])
 
-    for i in xrange(8):
-        VMOVDQU(ss[i], [reg_s+32*i])
+        # Copy state into ss
+        ss = [YMMRegister() for i in xrange(8)]
+        a, b, c, d, e, f, g, h = ss
 
-    sig0, sig1 = YMMRegister(), YMMRegister()
-    ch, maj = sig0, sig1
+        T1, T2 = YMMRegister(), YMMRegister()
 
-    for i in xrange(64):
-    # for i in xrange(1):
-        if i != 0 and i % 16 == 0:
-            # expand
-            for j in xrange(16):
-                w0 = w[j]
-                w14 = w[(j+14)%16]
-                w9 = w[(j+9)%16]
-                w1 = w[(j+1)%16]
+        for i in xrange(8):
+            VMOVDQU(ss[i], [reg_s+32*i])
 
-                reg_w0 = YMMRegister()
-                VMOVDQU(reg_w0, w0)
+        sig0, sig1 = YMMRegister(), YMMRegister()
+        ch, maj = sig0, sig1
 
-                # w0 = sigma1(w14) + w9 + sigma0(w1) + w0
-                #  sub1: sig1 = sigma1(w14) = ROTR(w14,17) ^ ROTR(w14,19) ^ SHR(w14,10)
-                reg_w14 = YMMRegister()
-                VMOVDQU(reg_w14, w14)
-                avx2_rotr32(sig1, reg_w14, 17)
-                avx2_rotr32(tmp, reg_w14, 19)
-                VPXOR(sig1, sig1, tmp)
-                VPSRLD(tmp, reg_w14, 10)
-                VPXOR(sig1, sig1, tmp)
+        for i in xrange(64):
+        # for i in xrange(1):
+            if i != 0 and i % 16 == 0:
+                # expand
+                for j in xrange(16):
+                    w0 = w[j]
+                    w14 = w[(j+14)%16]
+                    w9 = w[(j+9)%16]
+                    w1 = w[(j+1)%16]
 
-                #  sub2: sig = sig + sigma0(w1) = ROTR(w1, 7) ^ ROTR(w1,18) ^ SHR(w1, 3)
-                reg_w1 = YMMRegister()
-                VMOVDQU(reg_w1, w1)
-                avx2_rotr32(sig0, reg_w1, 7)
-                avx2_rotr32(tmp, reg_w1, 18)
-                VPXOR(sig0, sig0, tmp)
-                VPSRLD(tmp, reg_w1, 3)
-                VPXOR(sig0, sig0, tmp)
+                    reg_w0 = YMMRegister()
+                    VMOVDQU(reg_w0, w0)
 
-                VPADDD(reg_w0, reg_w0, sig1)
-                VPADDD(reg_w0, reg_w0, sig0)
-                VPADDD(reg_w0, reg_w0, w9)
-                VMOVDQU(w0, reg_w0)
+                    # w0 = sigma1(w14) + w9 + sigma0(w1) + w0
+                    #  sub1: sig1 = sigma1(w14) = ROTR(w14,17) ^ ROTR(w14,19) ^ SHR(w14,10)
+                    reg_w14 = YMMRegister()
+                    VMOVDQU(reg_w14, w14)
+                    avx2_rotr32(sig1, reg_w14, 17)
+                    avx2_rotr32(tmp, reg_w14, 19)
+                    VPXOR(sig1, sig1, tmp)
+                    VPSRLD(tmp, reg_w14, 10)
+                    VPXOR(sig1, sig1, tmp)
+
+                    #  sub2: sig = sig + sigma0(w1) = ROTR(w1, 7) ^ ROTR(w1,18) ^ SHR(w1, 3)
+                    reg_w1 = YMMRegister()
+                    VMOVDQU(reg_w1, w1)
+                    avx2_rotr32(sig0, reg_w1, 7)
+                    avx2_rotr32(tmp, reg_w1, 18)
+                    VPXOR(sig0, sig0, tmp)
+                    VPSRLD(tmp, reg_w1, 3)
+                    VPXOR(sig0, sig0, tmp)
+
+                    VPADDD(reg_w0, reg_w0, sig1)
+                    VPADDD(reg_w0, reg_w0, sig0)
+                    VPADDD(reg_w0, reg_w0, w9)
+                    VMOVDQU(w0, reg_w0)
 
 
-        # Subround (F)
-        # Part 1: T1 = h + Sigma1(e) + Ch(e,f,g) + k + w;
-        #  sub1: T1 = Sigma1(e) = ROTR(e, 6) ^ ROTR(e,11) ^ ROTR(e,25)
-        avx2_rotr32(T1, e, 6)
-        avx2_rotr32(tmp, e, 11)
-        VPXOR(T1, T1, tmp)
-        avx2_rotr32(tmp, e, 25)
-        VPXOR(T1, T1, tmp)
+            # Subround (F)
+            # Part 1: T1 = h + Sigma1(e) + Ch(e,f,g) + k + w;
+            #  sub1: T1 = Sigma1(e) = ROTR(e, 6) ^ ROTR(e,11) ^ ROTR(e,25)
+            avx2_rotr32(T1, e, 6)
+            avx2_rotr32(tmp, e, 11)
+            VPXOR(T1, T1, tmp)
+            avx2_rotr32(tmp, e, 25)
+            VPXOR(T1, T1, tmp)
 
-        # sub2: Ch = Ch(e,f,g) = (e & f) ^ (~e & g)
-        VPAND(ch, e, f)
-        VPCMPEQD(tmp, tmp, tmp) # tmp = 0xfff..f
-        VPXOR(tmp, tmp, e) # tmp = ~e
-        VPAND(tmp, tmp, g) # tmp = ~e & g
-        VPXOR(ch, ch, tmp)
+            # sub2: Ch = Ch(e,f,g) = (e & f) ^ (~e & g)
+            VPAND(ch, e, f)
+            VPCMPEQD(tmp, tmp, tmp) # tmp = 0xfff..f
+            VPXOR(tmp, tmp, e) # tmp = ~e
+            VPAND(tmp, tmp, g) # tmp = ~e & g
+            VPXOR(ch, ch, tmp)
 
-        # sub3: T1 = T1 + ch + h + k + w
-        VPADDD(T1, T1, ch)
-        VPADDD(T1, T1, h)
-        VPBROADCASTD(tmp, [reg_K + 4*i])
-        VPADDD(T1, T1, tmp)
-        VMOVDQU(tmp, w[i % 16])
-        VPADDD(T1, T1, tmp)
+            # sub3: T1 = T1 + ch + h + k + w
+            VPADDD(T1, T1, ch)
+            VPADDD(T1, T1, h)
+            VPBROADCASTD(tmp, [reg_K + 4*i])
+            VPADDD(T1, T1, tmp)
+            VMOVDQU(tmp, w[i % 16])
+            VPADDD(T1, T1, tmp)
 
-        # Part 2: T2 = Sigma0(a) + Maj(a,b,c)
-        #  sub1: T2 = Sigma0(a) = ROTR(a, 2) ^ ROTR(a,13) ^ ROTR(a,22)
-        avx2_rotr32(T2, a, 2)
-        avx2_rotr32(tmp, a, 13)
-        VPXOR(T2, T2, tmp)
-        avx2_rotr32(tmp, a, 22)
-        VPXOR(T2, T2, tmp)
+            # Part 2: T2 = Sigma0(a) + Maj(a,b,c)
+            #  sub1: T2 = Sigma0(a) = ROTR(a, 2) ^ ROTR(a,13) ^ ROTR(a,22)
+            avx2_rotr32(T2, a, 2)
+            avx2_rotr32(tmp, a, 13)
+            VPXOR(T2, T2, tmp)
+            avx2_rotr32(tmp, a, 22)
+            VPXOR(T2, T2, tmp)
 
-        # sub2: maj = Maj(a,b,c) = (a&b) ^ (a&c) ^ (b&c)
-        VPAND(maj, a, b)
-        VPAND(tmp, a, c)
-        VPXOR(maj, maj, tmp)
-        VPAND(tmp, b, c)
-        VPXOR(maj, maj, tmp)
+            # sub2: maj = Maj(a,b,c) = (a&b) ^ (a&c) ^ (b&c)
+            VPAND(maj, a, b)
+            VPAND(tmp, a, c)
+            VPXOR(maj, maj, tmp)
+            VPAND(tmp, b, c)
+            VPXOR(maj, maj, tmp)
 
-        VPADDD(T2, T2, maj)
-        
-        # Shuffling
-        VMOVDQU(h, g)
-        VMOVDQU(g, f)
-        VMOVDQU(f, e)
-        VPADDD(e, d, T1)
-        VMOVDQU(d, c)
-        VMOVDQU(c, b)
-        VMOVDQU(b, a)
-        VPADDD(a, T1, T2)
+            VPADDD(T2, T2, maj)
+            
+            # Shuffling
+            VMOVDQU(h, g)
+            VMOVDQU(g, f)
+            VMOVDQU(f, e)
+            VPADDD(e, d, T1)
+            VMOVDQU(d, c)
+            VMOVDQU(c, b)
+            VMOVDQU(b, a)
+            VPADDD(a, T1, T2)
 
-    # Write out state
-    for i in xrange(8):
-        VPADDD(ss[i], ss[i], [reg_s+32*i])
-        VMOVDQU([reg_s+32*i], ss[i])
+        # Write out state
+        for i in xrange(8):
+            VPADDD(ss[i], ss[i], [reg_s+32*i])
+            VMOVDQU([reg_s+32*i], ss[i])
+
+        ADD(reg_data_offset, 64)
+        SUB(reg_nblocks, 1)
+        JNZ(loop.begin)
 
     # Reset stack
     MOV(registers.rsp, reg_sp_save)
