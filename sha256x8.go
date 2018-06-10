@@ -1,9 +1,20 @@
+// Pure Go implementation of eightway sha256 using AVX2 instructions.
+//
+// Check sha256x8.Available() before calling any other function.
 package sha256x8
 
 import (
 	"reflect"
 	"unsafe"
 )
+
+// Returns whether the current architecture is supported.
+//
+// If false is returned, calling any of the other functions might result in
+// panics or illegal instruction exceptions.
+func Available() bool {
+	return available
+}
 
 // Represents the state of eight sha256 hashes.
 //

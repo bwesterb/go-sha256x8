@@ -45,7 +45,7 @@ Contributing
 
 There is still quite a lot to do:
 
- - Detect presence of AVX2 and use a fallback if it is not available.
+ - Optimize buffering
  - SHA256NI backend
  - AVX512 backend
  - AVX backend
